@@ -1,19 +1,31 @@
+# Documents & Specs
+docs/
+
+# All Hidden Directories (숨김 폴더 전체 제외: .agents, .github, .venv 등)
+.*/
+.agents/
+.github/
+
+# Hidden / Secret Files
+.env
+.env.*
+!.env.example
+!.gitignore
+
 # Python & Virtual Environments
 .venv/
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
+dist/
+build/
 .pytest_cache/
-
-# Environment variables & secrets
-.env
-.env.local
-
-# Streamlit
-.streamlit/secrets.toml
 
 # IDE & OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+*.tmp
+setup_configs.py
