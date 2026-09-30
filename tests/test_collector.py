@@ -57,3 +57,21 @@ def test_parse_api_item():
     assert parsed["sigungu"] == "강남구"
     assert parsed["apt_name"] == "대치은마"
     assert parsed["pyeong"] == pytest.approx(84.43 / 3.30578, rel=1e-2)
+
+def test_collector_generates_and_saves_ai_summaries(tmp_path):
+    db_path = tmp_path / "test_ai_collect.db"
+    db = DatabaseManager(db_path=db_path)
+    db.init_db()
+    
+    collector = AptTradeCollector(api_key="", db_manager=db)
+    # Collect mock data and verify AI summaries are generated for the dates
+    collector.collect_and_save(days=3, use_mock=True, count=20)
+    
+    dates = db.get_available_dates()
+    assert len(dates) > 0
+    
+    # Check that at least the most recent date has an AI summary stored
+    latest_date = dates[0]
+    summary = db.get_daily_summary(latest_date)
+    assert summary is not None
+    assert len(summary["summary_markdown"]) > 20

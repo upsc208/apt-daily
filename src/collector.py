@@ -13,9 +13,11 @@ import httpx
 try:
     from src.config import Config, get_lawd_codes
     from src.database import DatabaseManager
+    from src.ai_analyst import GeminiAnalyst
 except ImportError:
     from .config import Config, get_lawd_codes
     from .database import DatabaseManager
+    from .ai_analyst import GeminiAnalyst
 
 class AptTradeCollector:
     def __init__(self, api_key: str | None = None, db_manager: DatabaseManager | None = None):
@@ -23,6 +25,7 @@ class AptTradeCollector:
         self.db = db_manager or DatabaseManager()
         self.lawd_codes = get_lawd_codes()
         self.sido_map = {c["code"]: (c["sido"], c["sigungu"]) for c in self.lawd_codes}
+        self.analyst = GeminiAnalyst()
 
     def get_target_deal_ymds(self, days: int = 7) -> list[str]:
         """Get target YYYYMM strings covering the recent period."""
@@ -35,9 +38,7 @@ class AptTradeCollector:
             ymds.add(curr.strftime("%Y%m"))
             curr += timedelta(days=1)
             
-        # Also ensure recent active months are included
-        res = sorted(list(ymds))
-        return res
+        return sorted(list(ymds))
 
     def categorize_pyeong(self, pyeong: float) -> str:
         if pyeong < 20:
@@ -139,14 +140,12 @@ class AptTradeCollector:
                         continue
                         
                     text = response.text
-                    # Check for rate limit error
                     if "LIMITED_NUMBER_OF_SERVICE_REQUESTS" in text:
                         time.sleep(0.6 * (attempt + 1))
                         continue
                     if "<errMsg>SERVICE_KEY_IS_NOT_REGISTERED" in text:
                         continue
                         
-                    # Parse XML response
                     root = ET.fromstring(text)
                     items = []
                     for item_elem in root.findall(".//item"):
@@ -246,19 +245,45 @@ class AptTradeCollector:
             
         return results
 
+    def generate_and_save_ai_reports(self, days: int = 7):
+        """Automatically generate and save Gemini AI analyst reports for recent dates."""
+        available_dates = self.db.get_available_dates()
+        if not available_dates:
+            return
+
+        target_dates = available_dates[:days]
+        print(f"Generating and saving AI Analyst reports for recent dates: {target_dates}...")
+
+        for dt in target_dates:
+            # Check if summary already exists
+            existing = self.db.get_daily_summary(dt)
+            if existing:
+                print(f"  - [{dt}] Cached AI report already exists. Skipping.")
+                continue
+
+            day_df = self.db.get_trades_by_date(dt, exclude_canceled=True)
+            if day_df.empty:
+                continue
+
+            print(f"  - [{dt}] Generating Gemini AI report ({len(day_df)} trades)...")
+            summary_text = self.analyst.generate_summary(day_df, dt)
+            self.db.save_daily_summary(dt, summary_text, model_name=self.analyst.model_name)
+            time.sleep(0.5)
+
     def collect_and_save(self, days: int = 7, use_mock: bool = False, count: int = 200) -> int:
-        """Collect nationwide trade data and save to SQLite DB."""
+        """Collect nationwide trade data, save to SQLite DB, and generate AI reports."""
         if use_mock or not self.api_key:
             print(f"Collecting data in MOCK mode (count={count}, days={days})...")
             trades = self.generate_mock_data(days=days, count=count)
-            return self.db.upsert_trades(trades)
+            inserted = self.db.upsert_trades(trades)
+            self.generate_and_save_ai_reports(days=days)
+            return inserted
             
         target_ymds = self.get_target_deal_ymds(days=days)
         all_trades = []
         
         print(f"Collecting nationwide real trades for YMDs {target_ymds} across {len(self.lawd_codes)} regions...")
         
-        # Controlled concurrency to respect API rate limits (2-3 workers + sleep)
         with ThreadPoolExecutor(max_workers=3) as executor:
             tasks = []
             for reg in self.lawd_codes:
@@ -275,12 +300,11 @@ class AptTradeCollector:
                 time.sleep(0.05)
                         
         if not all_trades:
-            # If current future year has no data in official API, try most recent available real months (e.g. 202409)
             fallback_ymds = ["202409", "202408"]
             print(f"No records in {target_ymds}. Querying recent official records ({fallback_ymds}) from real API...")
             with ThreadPoolExecutor(max_workers=3) as executor:
                 tasks = []
-                for reg in self.lawd_codes[:60]: # Top 60 regions
+                for reg in self.lawd_codes[:60]:
                     for ymd in fallback_ymds:
                         tasks.append(executor.submit(self.fetch_lawd_trades, reg["code"], ymd))
                 for future in as_completed(tasks):
@@ -293,10 +317,15 @@ class AptTradeCollector:
         if not all_trades:
             print("No real data returned from API. Generating fallback sample data...")
             trades = self.generate_mock_data(days=days, count=count)
-            return self.db.upsert_trades(trades)
+            inserted = self.db.upsert_trades(trades)
+            self.generate_and_save_ai_reports(days=days)
+            return inserted
             
         inserted = self.db.upsert_trades(all_trades)
         print(f"[OK] Successfully collected and saved {len(all_trades)} REAL trades from Public Data API (inserted/updated: {inserted}).")
+
+        # Automatically generate and save Gemini AI analyst reports for recent dates
+        self.generate_and_save_ai_reports(days=days)
         return inserted
 
 def main():
