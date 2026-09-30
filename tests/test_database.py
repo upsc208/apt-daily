@@ -34,7 +34,7 @@ def test_db_init_and_upsert(tmp_path):
     assert inserted == 1
     assert db.get_total_count() == 1
     
-    # Duplicate insert test (Upsert should keep count = 1)
+    # Duplicate insert test (Upsert)
     inserted_again = db.upsert_trades(sample)
     assert db.get_total_count() == 1
 
@@ -97,3 +97,86 @@ def test_db_get_recent_trades_filtering(tmp_path):
     df_valid = db.get_recent_trades(days=30, exclude_canceled=True)
     assert len(df_valid) == 1
     assert df_valid.iloc[0]["apt_name"] == "단지A"
+
+def test_daily_summary_crud(tmp_path):
+    db_path = tmp_path / "test_summary.db"
+    db = DatabaseManager(db_path=db_path)
+    db.init_db()
+    
+    # 1. No summary initially
+    assert db.get_daily_summary("2026-09-30") is None
+    
+    # 2. Save summary
+    saved = db.save_daily_summary(
+        deal_date="2026-09-30",
+        summary_markdown="### 9월 30일 부동산 시장 브리핑\n거래량이 급증했습니다.",
+        model_name="gemini-2.5-flash"
+    )
+    assert saved is True
+    
+    # 3. Retrieve saved summary
+    summary = db.get_daily_summary("2026-09-30")
+    assert summary is not None
+    assert summary["deal_date"] == "2026-09-30"
+    assert "부동산 시장 브리핑" in summary["summary_markdown"]
+    assert summary["model_name"] == "gemini-2.5-flash"
+
+def test_available_dates_and_trades_by_date(tmp_path):
+    db_path = tmp_path / "test_dates.db"
+    db = DatabaseManager(db_path=db_path)
+    db.init_db()
+    
+    samples = [
+        {
+            "id": "1",
+            "deal_date": "2026-09-25",
+            "deal_year": 2026,
+            "deal_month": 9,
+            "deal_day": 25,
+            "sido": "서울",
+            "sigungu": "강남구",
+            "sigungu_code": "11680",
+            "umd_name": "개포동",
+            "apt_name": "단지A",
+            "exclusive_area": 84.0,
+            "pyeong": 25.4,
+            "pyeong_category": "중소형",
+            "floor": 5,
+            "build_year": 2015,
+            "deal_amount": 200000,
+            "pyeong_price": 7874.0,
+            "is_cancel": 0,
+            "cancel_date": "",
+            "created_at": "2026-09-30 00:00:00"
+        },
+        {
+            "id": "2",
+            "deal_date": "2026-09-30",
+            "deal_year": 2026,
+            "deal_month": 9,
+            "deal_day": 30,
+            "sido": "서울",
+            "sigungu": "서초구",
+            "sigungu_code": "11650",
+            "umd_name": "반포동",
+            "apt_name": "단지B",
+            "exclusive_area": 84.0,
+            "pyeong": 25.4,
+            "pyeong_category": "중소형",
+            "floor": 10,
+            "build_year": 2020,
+            "deal_amount": 300000,
+            "pyeong_price": 11811.0,
+            "is_cancel": 0,
+            "cancel_date": "",
+            "created_at": "2026-09-30 00:00:00"
+        }
+    ]
+    db.upsert_trades(samples)
+    
+    dates = db.get_available_dates()
+    assert dates == ["2026-09-30", "2026-09-25"]
+    
+    df_sep30 = db.get_trades_by_date("2026-09-30")
+    assert len(df_sep30) == 1
+    assert df_sep30.iloc[0]["apt_name"] == "단지B"

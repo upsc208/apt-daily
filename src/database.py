@@ -21,6 +21,7 @@ class DatabaseManager:
         """Initialize SQLite database with required tables and indexes."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
+            # 1. Apt trades table
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS apt_trades (
                 id TEXT PRIMARY KEY,
@@ -42,6 +43,16 @@ class DatabaseManager:
                 pyeong_price REAL NOT NULL,
                 is_cancel INTEGER DEFAULT 0,
                 cancel_date TEXT,
+                created_at TEXT NOT NULL
+            )
+            """)
+            
+            # 2. Daily AI summaries table
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS daily_ai_summaries (
+                deal_date TEXT PRIMARY KEY,
+                summary_markdown TEXT NOT NULL,
+                model_name TEXT DEFAULT 'gemini-2.5-flash',
                 created_at TEXT NOT NULL
             )
             """)
@@ -106,6 +117,22 @@ class DatabaseManager:
             
         return df
 
+    def get_trades_by_date(self, deal_date: str, exclude_canceled: bool = True) -> pd.DataFrame:
+        """Retrieve all trades on a specific date."""
+        self.init_db()
+        query = "SELECT * FROM apt_trades WHERE deal_date = ?"
+        params: list[object] = [deal_date]
+        
+        if exclude_canceled:
+            query += " AND is_cancel = 0"
+            
+        query += " ORDER BY deal_amount DESC"
+        
+        with self.get_connection() as conn:
+            df = pd.read_sql_query(query, conn, params=params)
+            
+        return df
+
     def get_all_trades(self, exclude_canceled: bool = True) -> pd.DataFrame:
         """Retrieve all trades stored in database."""
         self.init_db()
@@ -119,6 +146,15 @@ class DatabaseManager:
             
         return df
 
+    def get_available_dates(self) -> list[str]:
+        """Get list of distinct dates that have trade records, sorted descending."""
+        self.init_db()
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT DISTINCT deal_date FROM apt_trades ORDER BY deal_date DESC")
+            rows = cursor.fetchall()
+            return [r[0] for r in rows if r[0]]
+
     def get_total_count(self) -> int:
         """Get total trade records count in database."""
         self.init_db()
@@ -127,3 +163,43 @@ class DatabaseManager:
             cursor.execute("SELECT COUNT(*) FROM apt_trades")
             row = cursor.fetchone()
             return row[0] if row else 0
+
+    # ---------------------------------------------------------
+    # Daily AI Summaries CRUD
+    # ---------------------------------------------------------
+    def get_daily_summary(self, deal_date: str) -> dict | None:
+        """Retrieve cached AI summary for a specific date."""
+        self.init_db()
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT deal_date, summary_markdown, model_name, created_at FROM daily_ai_summaries WHERE deal_date = ?",
+                (deal_date,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "deal_date": row["deal_date"],
+                    "summary_markdown": row["summary_markdown"],
+                    "model_name": row["model_name"],
+                    "created_at": row["created_at"]
+                }
+        return None
+
+    def save_daily_summary(self, deal_date: str, summary_markdown: str, model_name: str = "gemini-2.5-flash") -> bool:
+        """Save or update AI summary for a specific date."""
+        self.init_db()
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sql = """
+        INSERT INTO daily_ai_summaries (deal_date, summary_markdown, model_name, created_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(deal_date) DO UPDATE SET
+            summary_markdown = excluded.summary_markdown,
+            model_name = excluded.model_name,
+            created_at = excluded.created_at
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, (deal_date, summary_markdown, model_name, now_str))
+            conn.commit()
+        return True

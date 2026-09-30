@@ -19,6 +19,9 @@ class Config:
     API_BASE_URL = "https://apis.data.go.kr/1613000/RTMSDataSvcAptTrade/getRTMSDataSvcAptTrade"
     API_DEV_URL = "https://apis.data.go.kr/1613000/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev"
 
+    # Google Gemini AI Config
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
 # Ensure DATA_DIR exists
 Config.DATA_DIR.mkdir(parents=True, exist_ok=True)
 
